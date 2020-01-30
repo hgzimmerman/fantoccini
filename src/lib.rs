@@ -772,6 +772,14 @@ impl Client {
         self.issue(WebDriverCommand::SwitchToFrame(params)).map(|_| self)
     }
 
+    /// Switches to a frame without specifying an id.
+    pub fn frame(mut self) -> impl Future<Item = Client, Error = error::CmdError> {
+        let params = SwitchToFrameParameters {
+            id: None
+        };
+        self.issue(WebDriverCommand::SwitchToFrame(params)).map(|_| self)
+    }
+
     /// Switches to the parent of the frame the client is currently contained within.
     pub fn parent_frame(mut self) -> impl Future<Item = Client, Error = error::CmdError> {
         self.issue(WebDriverCommand::SwitchToParentFrame).map(|_| self)
