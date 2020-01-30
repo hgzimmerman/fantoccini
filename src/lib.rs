@@ -180,8 +180,8 @@ extern crate webdriver;
 use http::HttpTryFrom;
 use serde_json::Value as Json;
 use tokio::prelude::*;
-use webdriver::command::{SendKeysParameters, WebDriverCommand};
-use webdriver::common::ELEMENT_KEY;
+use webdriver::command::{SendKeysParameters, WebDriverCommand, SwitchToFrameParameters};
+use webdriver::common::{ELEMENT_KEY, FrameId};
 use webdriver::error::WebDriverError;
 
 macro_rules! via_json {
@@ -761,6 +761,22 @@ impl Client {
             })
     }
 
+    /// Switches to the frame at the specified index.
+    pub fn frame_index(
+        mut self,
+        index: u16
+    ) -> impl Future<Item = Client, Error = error::CmdError> {
+        let params = SwitchToFrameParameters {
+            id: Some(FrameId::Short(index))
+        };
+        self.issue(WebDriverCommand::SwitchToFrame(params)).map(|_| self)
+    }
+
+    /// Switches to the parent of the frame the client is currently contained within.
+    pub fn parent_frame(mut self) -> impl Future<Item = Client, Error = error::CmdError> {
+        self.issue(WebDriverCommand::SwitchToParentFrame).map(|_| self)
+    }
+
     /// Find an element on the page.
     pub fn find(
         &mut self,
@@ -1108,6 +1124,19 @@ impl Element {
         c.issue(cmd)
             .and_then(move |v| c.parse_lookup(v).map(move |e| Element { c: c, e }))
             .and_then(move |e| e.click())
+    }
+
+    /// Switches to the frame contained within the element.
+    pub fn frame(
+        self,
+    ) -> impl Future<Item = Client, Error = error::CmdError> {
+        let Self {
+            mut c, e
+        } = self;
+        let params = SwitchToFrameParameters {
+            id: Some(FrameId::Element(e))
+        };
+        c.issue(WebDriverCommand::SwitchToFrame(params)).map(|_| c)
     }
 }
 
