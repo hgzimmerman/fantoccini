@@ -762,23 +762,13 @@ impl Client {
     }
 
     /// Switches to the frame at the specified index.
-    pub fn frame_index(
-        mut self,
-        index: u16
-    ) -> impl Future<Item = Client, Error = error::CmdError> {
+    pub fn frame(mut self, index: Option<u16>) -> impl Future<Item = Client, Error = error::CmdError> {
         let params = SwitchToFrameParameters {
-            id: Some(FrameId::Short(index))
+            id: index.map(FrameId::Short)
         };
         self.issue(WebDriverCommand::SwitchToFrame(params)).map(|_| self)
     }
 
-    /// Switches to a frame without specifying an id.
-    pub fn frame(mut self) -> impl Future<Item = Client, Error = error::CmdError> {
-        let params = SwitchToFrameParameters {
-            id: None
-        };
-        self.issue(WebDriverCommand::SwitchToFrame(params)).map(|_| self)
-    }
 
     /// Switches to the parent of the frame the client is currently contained within.
     pub fn parent_frame(mut self) -> impl Future<Item = Client, Error = error::CmdError> {
