@@ -121,13 +121,17 @@
 //! [WebDriver compatible]: https://github.com/Fyrd/caniuse/issues/2757#issuecomment-304529217
 //! [`geckodriver`]: https://github.com/mozilla/geckodriver
 #![deny(missing_docs)]
+#![warn(missing_debug_implementations, rust_2018_idioms)]
 
 use serde_json::Value as Json;
 use std::convert::TryFrom;
 use std::future::Future;
 use tokio::sync::oneshot;
-use webdriver::command::{SendKeysParameters, WebDriverCommand};
-use webdriver::common::ELEMENT_KEY;
+use webdriver::command::{
+    NewWindowParameters, SendKeysParameters, SwitchToFrameParameters, SwitchToWindowParameters,
+    WebDriverCommand,
+};
+use webdriver::common::{FrameId, ELEMENT_KEY};
 use webdriver::error::WebDriverError;
 
 macro_rules! via_json {
@@ -191,14 +195,14 @@ impl<'a> Into<webdriver::command::LocatorParameters> for Locator<'a> {
 pub use crate::session::Client;
 
 /// A single element on the current page.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Element {
     client: Client,
     element: webdriver::common::WebElement,
 }
 
 /// An HTML form on the current page.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Form {
     client: Client,
     form: webdriver::common::WebElement,
@@ -665,6 +669,21 @@ impl Client {
         }
     }
 
+    /// Switches to the frame specified at the index.
+    pub async fn enter_frame(mut self, index: Option<u16>) -> Result<Client, error::CmdError> {
+        let params = SwitchToFrameParameters {
+            id: index.map(FrameId::Short),
+        };
+        self.issue(WebDriverCommand::SwitchToFrame(params)).await?;
+        Ok(self)
+    }
+
+    /// Switches to the parent of the frame the client is currently contained within.
+    pub async fn enter_parent_frame(mut self) -> Result<Client, error::CmdError> {
+        self.issue(WebDriverCommand::SwitchToParentFrame).await?;
+        Ok(self)
+    }
+
     /// Find an element on the page.
     pub async fn find(&mut self, search: Locator<'_>) -> Result<Element, error::CmdError> {
         self.by(search.into()).await
@@ -758,6 +777,90 @@ impl Client {
             client: self.clone(),
             form: f,
         })
+    }
+
+    /// Gets the current window handle.
+    pub async fn window(&mut self) -> Result<webdriver::common::WebWindow, error::CmdError> {
+        let res = self.issue(WebDriverCommand::GetWindowHandle).await?;
+        match res {
+            Json::String(x) => Ok(webdriver::common::WebWindow(x)),
+            v => Err(error::CmdError::NotW3C(v)),
+        }
+    }
+
+    /// Gets a list of all active windows (and tabs)
+    pub async fn windows(&mut self) -> Result<Vec<webdriver::common::WebWindow>, error::CmdError> {
+        let res = self.issue(WebDriverCommand::GetWindowHandles).await?;
+        match res {
+            Json::Array(handles) => handles
+                .into_iter()
+                .map(|handle| match handle {
+                    Json::String(x) => Ok(webdriver::common::WebWindow(x)),
+                    v => Err(error::CmdError::NotW3C(v)),
+                })
+                .collect::<Result<Vec<_>, _>>(),
+            v => Err(error::CmdError::NotW3C(v)),
+        }
+    }
+
+    /// Switches to the chosen window.
+    pub async fn switch_to_window(
+        &mut self,
+        window: webdriver::common::WebWindow,
+    ) -> Result<(), error::CmdError> {
+        let params = SwitchToWindowParameters { handle: window.0 };
+        let _res = self.issue(WebDriverCommand::SwitchToWindow(params)).await?;
+        Ok(())
+    }
+
+    /// Closes the current window.
+    ///
+    /// Will close the session if no other windows exist.
+    ///
+    /// Closing a window will not switch the client to one of the remaining windows.
+    /// The switching must be done by calling `switch_to_window` using a still live window
+    /// after the current window has been closed.
+    pub async fn close_window(&mut self) -> Result<(), error::CmdError> {
+        let _res = self.issue(WebDriverCommand::CloseWindow).await?;
+        Ok(())
+    }
+
+    /// Creates a new window. If `is_tab` is `true`, then a tab will be created instead.
+    ///
+    /// Requires geckodriver > 0.24 and firefox > 66
+    ///
+    /// Windows are treated the same as tabs by the webdriver protocol.
+    /// The functions `new_window`, `switch_to_window`, `close_window`, `window` and `windows`
+    /// all operate on both tabs and windows.
+    pub async fn new_window(
+        &mut self,
+        as_tab: bool,
+    ) -> Result<webdriver::response::NewWindowResponse, error::CmdError> {
+        let type_hint = if as_tab { "tab" } else { "window" }.to_string();
+        let type_hint = Some(type_hint);
+        let params = NewWindowParameters { type_hint };
+        match self.issue(WebDriverCommand::NewWindow(params)).await? {
+            Json::Object(mut obj) => {
+                let handle = match obj
+                    .remove("handle")
+                    .and_then(|x| x.as_str().map(String::from))
+                {
+                    Some(handle) => handle,
+                    None => return Err(error::CmdError::NotW3C(Json::Object(obj))),
+                };
+
+                let typ = match obj
+                    .remove("type")
+                    .and_then(|x| x.as_str().map(String::from))
+                {
+                    Some(typ) => typ,
+                    None => return Err(error::CmdError::NotW3C(Json::Object(obj))),
+                };
+
+                Ok(webdriver::response::NewWindowResponse { handle, typ })
+            }
+            v => Err(error::CmdError::NotW3C(v)),
+        }
     }
 
     // helpers
@@ -1015,6 +1118,21 @@ impl Element {
         }
         .click()
         .await
+    }
+
+    /// Switches to the frame contained within the element.
+    pub async fn enter_frame(self) -> Result<Client, error::CmdError> {
+        let Self {
+            mut client,
+            element,
+        } = self;
+        let params = SwitchToFrameParameters {
+            id: Some(FrameId::Element(element)),
+        };
+        client
+            .issue(WebDriverCommand::SwitchToFrame(params))
+            .await?;
+        Ok(client)
     }
 }
 

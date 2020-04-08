@@ -17,7 +17,7 @@ use webdriver::error::WebDriverError;
 type Ack = oneshot::Sender<Result<Json, error::CmdError>>;
 
 /// A WebDriver client tied to a single browser session.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Client {
     tx: mpsc::UnboundedSender<Task>,
     is_legacy: bool,
@@ -121,7 +121,7 @@ impl Ongoing {
     }
 
     // returns true if outer loop should break
-    fn poll(&mut self, try_extract_session: bool, cx: &mut Context) -> Poll<OngoingResult> {
+    fn poll(&mut self, try_extract_session: bool, cx: &mut Context<'_>) -> Poll<OngoingResult> {
         let rt = match mem::replace(self, Ongoing::None) {
             Ongoing::None => OngoingResult::Continue,
             Ongoing::Break => OngoingResult::Break,
@@ -192,7 +192,7 @@ pub(crate) struct Session {
 impl Future for Session {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
             if self.ongoing.is_some() {
                 let has_session = self.session.is_none();
@@ -313,7 +313,9 @@ impl Session {
                 Err(error::NewSessionError::NotW3C(Json::String(v)))
             }
             Err(error::CmdError::Standard(
-                e @ WebDriverError {
+                e
+                @
+                WebDriverError {
                     error: ErrorStatus::SessionNotCreated,
                     ..
                 },
@@ -484,6 +486,13 @@ impl Session {
             WebDriverCommand::SetWindowRect(..) => base.join("window/rect"),
             WebDriverCommand::GetWindowRect => base.join("window/rect"),
             WebDriverCommand::TakeScreenshot => base.join("screenshot"),
+            WebDriverCommand::SwitchToFrame(_) => base.join("frame"),
+            WebDriverCommand::SwitchToParentFrame => base.join("frame/parent"),
+            WebDriverCommand::GetWindowHandle => base.join("window"),
+            WebDriverCommand::GetWindowHandles => base.join("window/handles"),
+            WebDriverCommand::NewWindow(..) => base.join("window/new"),
+            WebDriverCommand::SwitchToWindow(..) => base.join("window"),
+            WebDriverCommand::CloseWindow => base.join("window"),
             _ => unimplemented!(),
         }
     }
@@ -571,6 +580,25 @@ impl Session {
             WebDriverCommand::SetWindowRect(ref params) => {
                 body = Some(serde_json::to_string(params).unwrap());
                 method = Method::POST;
+            }
+            WebDriverCommand::SwitchToFrame(ref params) => {
+                body = Some(serde_json::to_string(params).unwrap());
+                method = Method::POST
+            }
+            WebDriverCommand::SwitchToParentFrame => {
+                body = Some("{}".to_string());
+                method = Method::POST
+            }
+            WebDriverCommand::SwitchToWindow(ref params) => {
+                body = Some(serde_json::to_string(params).unwrap());
+                method = Method::POST;
+            }
+            WebDriverCommand::NewWindow(ref params) => {
+                body = Some(serde_json::to_string(params).unwrap());
+                method = Method::POST;
+            }
+            WebDriverCommand::CloseWindow => {
+                method = Method::DELETE;
             }
             _ => {}
         }
@@ -753,6 +781,7 @@ impl Session {
                             "no such cookie" => ErrorStatus::NoSuchCookie,
                             "invalid session id" => ErrorStatus::InvalidSessionId,
                             "no such element" => ErrorStatus::NoSuchElement,
+                            "no such window" => ErrorStatus::NoSuchWindow,
                             _ => unreachable!(
                                 "received unknown error ({}) for NOT_FOUND status code",
                                 error
